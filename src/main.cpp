@@ -16,6 +16,7 @@
 // minify replace false 0
 // minify replace NULL 0
 
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -596,8 +597,9 @@ const i32 pawn_attacked_penalty[] = {S(63, 14), S(156, 140)};
            24;
 }
 
-[[nodiscard]] u64 get_hash(const Position &pos) {
+[[nodiscard]] array<u64, 2> get_hash(const Position &pos) {
     u64 hash = pos.flipped;
+    u64 hashp;
 
     // Pieces
     for (i32 p = Pawn; p < None; ++p) {
@@ -613,6 +615,8 @@ const i32 pawn_attacked_penalty[] = {S(63, 14), S(156, 140)};
             copy &= copy - 1;
             hash ^= keys[p * 64 + sq + 6 * 64];
         }
+        if (!p)
+            hashp = hash;
     }
 
     // En passant square
@@ -622,7 +626,7 @@ const i32 pawn_attacked_penalty[] = {S(63, 14), S(156, 140)};
     // Castling permissions
     hash ^= keys[13 * 64 + pos.castling[0] + pos.castling[1] * 2 + pos.castling[2] * 4 + pos.castling[3] * 8];
 
-    return hash;
+    return {hash, hashp};
 }
 
 i32 alphabeta(Position &pos,
@@ -638,6 +642,7 @@ i32 alphabeta(Position &pos,
               i32 &stop,
               vector<u64> &hash_history,
               i32 (&hh_table)[2][2][64][64],
+              i32 (&ch_table)[2][16384],
               const i32 do_null = true) {
     assert(alpha < beta);
     assert(ply >= 0);
@@ -653,7 +658,7 @@ i32 alphabeta(Position &pos,
     depth += in_check;
 
     i32 in_qsearch = depth <= 0;
-    const u64 tt_key = get_hash(pos);
+    const auto [tt_key, hashp] = get_hash(pos);
 
     if (ply > 0 && !in_qsearch) {
         // Repetition detection
@@ -676,12 +681,12 @@ i32 alphabeta(Position &pos,
     else
         depth -= depth > 3;
 
-    i32 static_eval = stack[ply].score = eval(pos);
+    i32 static_eval = stack[ply].score = eval(pos) + ch_table[pos.flipped][hashp % 16384] / 256;
     const i32 improving = ply > 1 && static_eval > stack[ply - 2].score;
 
     // If static_eval > tt_entry.score, tt_entry.flag cannot be Lower (ie must be Upper or Exact).
     // Otherwise, tt_entry.flag cannot be Upper (ie must be Lower or Exact).
-    if (tt_entry.key == tt_key && tt_entry.flag != static_eval > tt_entry.score)
+    if (tt_entry.key == (u64)tt_key && tt_entry.flag != static_eval > tt_entry.score)
         static_eval = tt_entry.score;
 
     if (in_qsearch && static_eval > alpha) {
@@ -720,6 +725,7 @@ i32 alphabeta(Position &pos,
                            stop,
                            hash_history,
                            hh_table,
+                           ch_table,
                            false) >= beta)
                 return beta;
         }
@@ -803,7 +809,8 @@ i32 alphabeta(Position &pos,
                                    stack,
                                    stop,
                                    hash_history,
-                                   hh_table)) > alpha &&
+                                   hh_table,
+                                   ch_table)) > alpha &&
                reduction > 0)
             reduction = 0;
 
@@ -820,7 +827,8 @@ i32 alphabeta(Position &pos,
                                stack,
                                stop,
                                hash_history,
-                               hh_table);
+                               hh_table,
+                               ch_table);
 
         // Exit early if out of time
         if (depth > 4 && (stop || now() >= stop_time)) {
@@ -870,6 +878,14 @@ i32 alphabeta(Position &pos,
     if (best_score == -inf)
         return in_check ? ply - mate_score : 0;
 
+    // Update correction history table
+    i32 &e = ch_table[pos.flipped][hashp % 16384];
+    if (!in_qsearch && !in_check && (best_move.from == best_move.to || None == piece_on(pos, best_move.to)) &&
+        !(tt_flag == Lower && best_score <= static_eval) && !(tt_flag == Upper && best_score >= static_eval)) {
+        i32 nw = min(16, 1 + depth);
+        e = min(max((e * (256 - nw) + nw * (best_score - static_eval) * 256) / 256, -8192), 8192);
+    }
+
     // Save to TT
     tt_entry = {tt_key, best_move, tt_flag, int16_t(best_score), int16_t(!in_qsearch * depth)};
 
@@ -902,7 +918,7 @@ void print_pv(const Position &pos, const Move move, vector<u64> &hash_history) {
     cout << " " << move_str(move, pos.flipped);
 
     // Probe the TT in the resulting position
-    const u64 tt_key = get_hash(npos);
+    const u64 tt_key = get_hash(npos)[0];
     const TTEntry &tt_entry = transposition_table[tt_key % num_tt_entries];
 
     // Only continue if the move was valid and comes from a PV search
@@ -924,6 +940,7 @@ auto iteratively_deepen(Position &pos,
                         i32 &stop,
                         vector<u64> &hash_history,
                         i32 (&hh_table)[2][2][64][64],
+                        i32 (&ch_table)[2][16384],
                         // minify enable filter delete
                         i32 thread_id,
                         const i32 bench_depth,
@@ -954,7 +971,8 @@ auto iteratively_deepen(Position &pos,
                               stack,
                               stop,
                               hash_history,
-                              hh_table);
+                              hh_table,
+                              ch_table);
 
             // Hard time limit exceeded
             if (stop || now() >= start_time + allocated_time)
@@ -1106,7 +1124,7 @@ i32 main(
     Position pos;
     vector<u64> hash_history;
     i32 hh_table[2][2][64][64] = {};
-
+    i32 ch_table[2][16384] = {};
     // minify enable filter delete
     // OpenBench compliance
     u64 total_nodes = 0;
@@ -1146,7 +1164,7 @@ i32 main(
         for (const auto &[fen, depth] : bench_positions) {
             i32 stop = false;
             set_fen(pos, fen);
-            iteratively_deepen(pos, stop, hash_history, hh_table, 0, depth, total_nodes, 1 << 20, now());
+            iteratively_deepen(pos, stop, hash_history, hh_table, ch_table, 0, depth, total_nodes, 1 << 20, now());
         }
         const u64 elapsed = now() - start_time;
 
@@ -1243,6 +1261,7 @@ i32 main(
                                        stop,
                                        hash_history,
                                        hh_table,
+                                       ch_table,
                                        // minify enable filter delete
                                        i,
                                        0,
@@ -1255,6 +1274,7 @@ i32 main(
                                                       stop,
                                                       hash_history,
                                                       hh_table,
+                                                      ch_table,
                                                       // minify enable filter delete
                                                       0,
                                                       0,
@@ -1318,7 +1338,7 @@ i32 main(
             for (i32 i = 0; i < num_moves; ++i) {
                 if (word == move_str(moves[i], pos.flipped)) {
                     if (piece_on(pos, moves[i].to) == None && piece_on(pos, moves[i].from))
-                        hash_history.emplace_back(get_hash(pos));
+                        hash_history.emplace_back(get_hash(pos)[0]);
                     else
                         hash_history.clear();
 
