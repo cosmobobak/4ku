@@ -686,7 +686,7 @@ i32 alphabeta(Position &pos,
 
     // If static_eval > tt_entry.score, tt_entry.flag cannot be Lower (ie must be Upper or Exact).
     // Otherwise, tt_entry.flag cannot be Upper (ie must be Lower or Exact).
-    if (tt_entry.key == (u64)tt_key && tt_entry.flag != static_eval > tt_entry.score)
+    if (tt_entry.key == tt_key && tt_entry.flag != static_eval > tt_entry.score)
         static_eval = tt_entry.score;
 
     if (in_qsearch && static_eval > alpha) {
@@ -879,9 +879,9 @@ i32 alphabeta(Position &pos,
         return in_check ? ply - mate_score : 0;
 
     // Update correction history table
-    i32 &e = ch_table[pos.flipped][hashp % 16384];
     if (!in_qsearch && !in_check && (best_move.from == best_move.to || None == piece_on(pos, best_move.to)) &&
         !(tt_flag == Lower && best_score <= static_eval) && !(tt_flag == Upper && best_score >= static_eval)) {
+        i32 &e = ch_table[pos.flipped][hashp % 16384];
         i32 nw = min(16, 1 + depth);
         e = min(max((e * (256 - nw) + nw * (best_score - static_eval) * 256) / 256, -8192), 8192);
     }
