@@ -6,3 +6,4 @@ cmake-build-*/
 *.exe
 *.lzma
 src/main-mini.cpp
+venv

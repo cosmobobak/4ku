@@ -3,6 +3,7 @@ import re
 import os.path
 from dataclasses import dataclass
 import time
+from typing import Generator
 
 
 @dataclass
@@ -32,7 +33,7 @@ class Settings:
         self.replacements = dict({"CLOCK_MONOTONIC": str(time.CLOCK_MONOTONIC)})
 
 
-def name_generator() -> str:
+def name_generator() -> Generator[str, None, None]:
     def get_char(idx: int) -> str:
         if idx % 52 < 26:
             return str(chr(ord("a") + idx % 26))
@@ -218,7 +219,7 @@ assert get_tokens("x = 1+2;") == ["x", " ", "=", " ", "1", "+", "2", ";"]
 
 
 def is_name(text: str) -> bool:
-    return text and (text.startswith("_") or text[0].isalpha())
+    return text != "" and (text.startswith("_") or text[0].isalpha())
 
 
 assert is_name("test")
@@ -245,11 +246,11 @@ assert not is_name(" ")
 assert not is_name("\t")
 assert not is_name("\n")
 assert not is_name("\0")
-assert not is_name(None)
+# assert not is_name(None)
 
 
 def is_attachable(part: str) -> bool:
-    return part and not (is_name(part) or part.isnumeric())
+    return part != "" and not (is_name(part) or part.isnumeric())
 
 
 assert is_attachable("+")
@@ -318,7 +319,7 @@ assert collect_chunks(["a", "b", "c", "d"], ["c"], ["e"]) == ["a", "b", "c", "d"
 assert collect_chunks(["a", "b", "c", "d"], ["e"], ["c"]) == ["a", "b", "c", "d"]
 
 
-def dissect(src: str, settings: Settings = Settings()) -> str:
+def dissect(src: str, settings: Settings = Settings()) -> tuple[list[str], set[str], set[str], set[str], dict[str, str]]:
     src += "\n"
     tokens: list = get_tokens(src)
 
